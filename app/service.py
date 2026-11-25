@@ -13,13 +13,13 @@ import logging
 from app.llm.base import LLMClient, LLMIntegrationError
 from app.models import Ticket, TicketCreate, TicketStatus, TriageResult
 from app.rules import classify_with_rules
-from app.storage import TicketRepository
+from app.storage import TicketRepositoryProtocol
 
 logger = logging.getLogger(__name__)
 
 
 class TriageService:
-    def __init__(self, repository: TicketRepository, llm_client: LLMClient | None = None) -> None:
+    def __init__(self, repository: TicketRepositoryProtocol, llm_client: LLMClient | None = None) -> None:
         self.repository = repository
         self.llm_client = llm_client
         self.llm_failures = 0
