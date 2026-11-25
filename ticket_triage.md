@@ -1,48 +1,56 @@
-Crie um projeto completo e funcional em Django chamado `ticket_triage` que demonstra a integração em nível de produção de uma LLM (usando o SDK oficial `google-genai`) para triagem automática de tickets de suporte ao cliente.
+# Ticket Triage — Especificação da Triagem
 
-### Requisitos Técnicos e Arquitetura
-1. **Ambiente e Dependências:**
-   - Crie o arquivo `requirements.txt` contendo: `django`, `google-genai`, `pydantic`, `python-dotenv`.
-   - Crie um arquivo `.env.example` com a variável `GEMINI_API_KEY=sua_chave_aqui` e configure `settings.py` para carregar variáveis de ambiente via `python-dotenv`.
-   - Use SQLite como banco de dados padrão.
+Especificação do sistema implementado em FastAPI (ver `README.md` para
+arquitetura e instruções de execução).
 
-2. **Estrutura do Projeto:**
-   - Projeto principal: `core`
-   - App principal: `tickets`
+> Nota: uma versão anterior deste arquivo continha uma spec de projeto
+> Django + google-genai, que não corresponde ao sistema implementado.
+> O conteúdo antigo permanece no histórico do git (commit `a4edb0c`).
 
-3. **Modelagem de Dados (`tickets/models.py`):**
-   - Crie o model `Ticket` com os campos:
-     - `mensagem_original` (TextField)
-     - `resumo` (CharField, max_length=255)
-     - `categoria` (CharField, choices: `FINANCEIRO`, `TECNICO`, `COMERCIAL`, `OUTROS`)
-     - `urgencia` (CharField, choices: `BAIXA`, `MEDIA`, `ALTA`)
-     - `resposta_sugerida` (TextField)
-     - `tokens_utilizados` (IntegerField, null=True, blank=True)
-     - `criado_em` (DateTimeField, auto_now_add=True)
-   - Registre o model `Ticket` no `tickets/admin.py` com list_display, list_filter e search_fields configurados.
+## Categorias e roteamento
 
-4. **Camada de Serviço de IA (`tickets/services.py`):**
-   - Isole toda a lógica de comunicação com a LLM neste arquivo.
-   - Defina um schema estrito usando `pydantic.BaseModel` (`AnaliseTicketSchema`) contendo os campos `resumo`, `categoria`, `urgencia` e `resposta_sugerida` com descrições claras via `Field(description=...)`.
-   - Implemente a função `processar_ticket_com_ia(texto: str) -> dict`:
-     - Utilize `from google import genai` e `from google.genai import types`.
-     - Use o modelo `gemini-2.5-flash`.
-     - Configure `GenerateContentConfig` com `system_instruction`, `temperature=0.2`, `response_mime_type="application/json"` e `response_schema=AnaliseTicketSchema`.
-     - Capture o total de tokens gastos a partir dos metadados de uso (`usage_metadata.total_token_count`) se disponível.
-     - Implemente tratamento de exceções robusto (`try/except`) para falhas de API, falta de chave ou timeout, retornando um dicionário padronizado (`{"sucesso": bool, "dados": dict | None, "erro": str | None}`).
+| Categoria          | Equipe destino | Exemplos de gatilho                        |
+|--------------------|----------------|--------------------------------------------|
+| `billing`          | billing        | cobrança, fatura, reembolso, assinatura    |
+| `access`           | security       | login, senha, 2fa, bloqueado, token        |
+| `bug`              | engineering    | erro, falha, crash, exception, 500         |
+| `feature_request`  | product        | sugestão, gostaria, melhoria, feature      |
+| `question`         | support        | como faço, dúvida, ajuda                   |
+| `other`            | support        | sem correspondência                        |
 
-5. **Views e Rotas (`tickets/views.py` e `urls.py`):**
-   - Crie uma view principal (`index`) que:
-     - No `POST`: recebe a mensagem do formulário, chama `processar_ticket_com_ia()`, salva o resultado no banco de dados (`Ticket.objects.create(...)`) caso tenha sucesso, ou exibe a mensagem de erro sem quebrar a aplicação.
-     - No `GET` (e após o `POST`): renderiza o formulário e lista os últimos 10 tickets analisados salvos no banco de dados, ordenados do mais recente para o mais antigo.
+## Prioridades
 
-6. **Interface Web (`tickets/templates/tickets/index.html`):**
-   - Crie um template HTML limpo, responsivo e auto-contido (CSS inline ou `<style>` no próprio arquivo, sem depender de frameworks pesados) com:
-     - Formulário com `<textarea>` e botão de envio (com estado visual de carregamento via JS simples ao submeter para evitar cliques duplos).
-     - Exibição de alertas de erro caso a API falhe.
-     - Histórico em cards dos tickets analisados mostrando badges coloridos para `Urgência` e `Categoria`, o resumo, a resposta sugerida e a contagem de tokens consumidos.
+- `critical`: bug + produção/down → escala imediata
+- `high`: urgente, crítico, fora do ar, emergência
+- `medium`: padrão
+- `low`: "sem pressa", "quando puder"
 
-### Execução Final
-Após criar todos os arquivos:
-1. Rode `python manage.py makemigrations` e `python manage.py migrate` para validar que o banco e os modelos estão sem erros.
-2. Liste no final os comandos exatos que eu preciso rodar para ativar o ambiente, configurar a chave e iniciar o servidor.
+## Confiança
+
+- Motor de regras: `0.3 + 0.15 × (nº de keywords da categoria)`, teto `0.9`;
+  sem correspondência → `0.2`.
+- Camada LLM (mock ou HTTP): resultado das regras + `0.1`, teto `0.95`,
+  com resumo gerado do ticket.
+
+## Decisão LLM vs. regras
+
+- `LLM_MODE=mock` (padrão): `MockLLMClient` em processo (source `llm`).
+- `LLM_MODE=real`: `RealLLMClient` chama `LLM_BASE_URL` (protocolo
+  `/v1/chat/completions`). No docker-compose, aponta para o container
+  `llm-mock` (provedor fake OpenAI-compatível); para provedor real,
+  troque `LLM_BASE_URL` e preencha `LLM_API_KEY`.
+- Em falha de rede/timeout/resposta inválida → `LLMIntegrationError` →
+  serviço aplica fallback de regras (source `rules`) e incrementa
+  `llm_failures` no `/health`.
+
+## Persistência
+
+- `STORAGE=memory` (padrão sem Docker): dados em processo; perde no
+  restart; use apenas 1 worker do uvicorn.
+- `STORAGE=redis`: `RedisTicketRepository` — JSON por ticket
+  (`ticket:{id}`) + sorted set (`tickets:by_created`) para ordenação;
+  sobrevive a restarts e permite múltiplos workers.
+
+## Status do ticket
+
+`open` → `triaged` (sem equipe) → `routed` (com equipe) → `closed`
