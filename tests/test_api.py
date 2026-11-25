@@ -65,12 +65,14 @@ def test_validation_error(client: TestClient):
 
 
 def test_real_mode_falls_back_to_rules():
-    app = create_app(Settings(llm_mode="real"))
+    # Base URL inválida de propósito: RealLLMClient falha → fallback de regras
+    app = create_app(
+        Settings(llm_mode="real", llm_base_url="http://127.0.0.1:1/v1", llm_timeout_seconds=1)
+    )
     client = TestClient(app)
     resp = client.post("/tickets", json={"title": "Erro crítico em produção"})
     assert resp.status_code == 201
     triage = resp.json()["triage"]
-    # RealLLMClient não implementado → fallback determinístico
     assert triage["source"] == "rules"
     assert triage["category"] == "bug"
     assert client.get("/health").json()["llm_failures"] == 1

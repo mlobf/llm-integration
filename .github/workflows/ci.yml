@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: python -m pytest -v
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t ticket-triage:test .
+
+      # Prova que o requirements.txt fecha e os testes passam DENTRO da imagem
+      - name: Run tests inside container
+        run: |
+          docker run --rm -v "$PWD/tests:/code/tests:ro" ticket-triage:test \
+            python -m pytest /code/tests -v
+
+      - name: Compose smoke test
+        run: |
+          cp .env.example .env
+          docker compose up -d --build
+          timeout 60 bash -c 'until curl -sf localhost:8000/health; do sleep 2; done'
+          curl -sf -X POST localhost:8000/tickets -H 'Content-Type: application/json' \
+            -d '{"title":"Fatura cobrada duas vezes","description":"reembolso urgente"}' \
+            | grep -q '"source":"llm"'
+          # Persistência via Redis: ticket sobrevive a restart da api
+          docker compose restart api
+          timeout 60 bash -c 'until curl -sf localhost:8000/health; do sleep 2; done'
+          [ "$(curl -s localhost:8000/tickets | grep -o '"id"' | wc -l)" -ge 1 ]
+          docker compose down -v
