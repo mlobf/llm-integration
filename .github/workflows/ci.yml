@@ -2,8 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: ["**"]
   pull_request:
+
+# Feedback em todo push (não só na master); cancela execuções obsoletas
+# da mesma branch quando um commit novo chega.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
